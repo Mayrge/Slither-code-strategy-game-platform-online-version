@@ -1,0 +1,14 @@
+{
+  "format": "snake-arena-blank-map",
+  "version": 1,
+  "width": 30,
+  "height": 30,
+  "maxTurns": 500,
+  "initialLength": 5,
+  "dropRatio": 0.3,
+  "decisionMs": 50,
+  "foodTarget": 60,
+  "walls": [],
+  "snakes": [],
+  "food": []
+}
