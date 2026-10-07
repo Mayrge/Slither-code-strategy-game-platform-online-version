@@ -180,11 +180,13 @@ export class ArenaService {
       worker.on('exit',()=>{if(!finished)complete('执行环境退出，未计入排行榜');});
     } catch(error) { this.store.run("UPDATE jobs SET status='failed',error=?,finished_at=? WHERE id=?",error.message,Date.now(),job.id); this.kick(); }
   }
-  live(user,id,after=0) {
+  live(user,id,after=0,summary=false) {
     const job=this.store.one('SELECT owner,status,total,completed,error FROM jobs WHERE id=?',id);
     if(!job||(job.owner!==user.id&&user.role!=='admin'))fail('无权查看该比赛',403);
     if(!Number.isSafeInteger(after)||after<0)fail('画面序号无效');
-    return {status:job.status,total:job.total,completed:job.completed,error:job.error,...(this.current?.id===id?this.current.buffer.since(after):{frames:[],sequence:after})};
+    const current=this.current?.id===id?this.current.buffer:null;
+    if(summary){const latest=current?.frames.at(-1);return {status:job.status,total:job.total,completed:job.completed,error:job.error,round:latest?.round??null,turn:latest?.frame.turn??null};}
+    return {status:job.status,total:job.total,completed:job.completed,error:job.error,...(current?current.since(after):{frames:[],sequence:after})};
   }
   jobs(user) { return this.store.all('SELECT id,candidate,kind,status,total,completed,seed,created_at,finished_at,error,applied,roster FROM jobs WHERE owner=? ORDER BY created_at DESC LIMIT 200',user.id).map(j=>({...j,roster:JSON.parse(j.roster)})); }
   gameList(user,id) {

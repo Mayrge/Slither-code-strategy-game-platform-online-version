@@ -52,6 +52,9 @@ test('live frames are bounded, incremental, ordered across rounds, and private',
   const arena=new ArenaService(store,{startWorkers:false});store.run("UPDATE jobs SET status='running'");arena.current={id:'job',buffer};
   assert.throws(()=>arena.live({id:'other',role:'user'},'job'),/无权/);assert.throws(()=>arena.live({id:'u'},'job',-1),/序号/);
   assert.equal(arena.live({id:'u'},'job',150).frames.length,2);
+  const summary=arena.live({id:'u'},'job',0,true);
+  assert.equal(summary.round,2);assert.equal(summary.turn,1);assert.equal('frames' in summary,false);assert.equal('config' in summary,false);
+  assert.throws(()=>arena.live({id:'other',role:'user'},'job',0,true),/无权/);
   assert.equal(JSON.stringify(arena.live({id:'u'},'job')).includes('source'),false);
   arena.current=null;store.run("UPDATE jobs SET status='completed',completed=1");assert.equal(arena.live({id:'u'},'job').status,'completed');
  }finally{store.close();}
