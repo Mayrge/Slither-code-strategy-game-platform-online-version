@@ -99,9 +99,9 @@ export class ArenaService {
       if(this.store.one("SELECT id FROM jobs WHERE kind='bootstrap' AND status IN ('queued','running')")) fail('初始定榜正在进行');
       roster=this.store.all("SELECT * FROM players WHERE system=1 AND status='registered'"); count=50;
     } else {
-      const own=this.store.one('SELECT * FROM players WHERE id=? AND owner=?',candidate,user.id);
-      if(!own || own.status==='retired') fail('请选择自己的未退役选手');
       if(kind==='ranked') {
+        const own=this.store.one('SELECT * FROM players WHERE id=? AND owner=?',candidate,user.id);
+        if(!own || own.status==='retired') fail('请选择自己的未退役选手');
         if(own.status!=='registered') fail('正式排位需要注册选手');
         if(!this.store.get('ranking',emptyRanking()).order.length) fail('管理员尚未完成系统选手初始定榜');
         if(own.cooldown>Date.now()) fail('该选手仍处于12小时排位冷却');
@@ -110,8 +110,8 @@ export class ArenaService {
       } else {
         if(!Number.isInteger(count)||count<1||count>100) fail('练习局数需要1～100');
         if(!Array.isArray(opponents)||opponents.length<1||opponents.length>9||new Set(opponents).size!==opponents.length||opponents.includes(candidate)) fail('请选择1～9名不同对手');
-        roster=[own,...opponents.map(id=>this.store.one("SELECT * FROM players WHERE id=? AND (status='registered' OR (owner=? AND status='draft'))",id,user.id))];
-        if(roster.some(p=>!p)) fail('对手不可用');
+        roster=[candidate,...opponents].map(id=>this.store.one("SELECT * FROM players WHERE id=? AND (status='registered' OR (owner=? AND status='draft'))",id,user.id));
+        if(roster.some(p=>!p)) fail('请选择可参与练习的选手：系统选手、已注册选手或自己的草稿');
         if(this.store.one("SELECT id FROM jobs WHERE owner=? AND kind='practice' AND status IN ('queued','running')",user.id)) fail('请先完成已有练习');
         rateLimit(this.store,'practice:'+user.id,20,86400000);
       }

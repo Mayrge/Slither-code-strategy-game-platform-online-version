@@ -4,6 +4,7 @@ import { mkdtemp,rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve,sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { randomUUID } from 'node:crypto';
 import { createServer } from '../server.mjs';
 import { bootstrap } from '../server/auth.mjs';
 import { INITIAL_MODELS } from '../setup.mjs';
@@ -52,4 +53,51 @@ test('real 50-game settlement, replay deletion, cooldown, immutable history and 
     if(app)await app.close();
     const parent=resolve(tmpdir());assert.ok(resolve(folder).startsWith(parent+sep));await rm(folder,{recursive:true,force:true});
   }
+});
+
+test('an account without players can visualize system and other registered players without changing ranked records',{timeout:60000},async()=>{
+  const app=await createServer({database:':memory:'});
+  await new Promise(r=>app.server.listen(0,'127.0.0.1',r));
+  const base='http://127.0.0.1:'+app.server.address().port;
+  try{
+    await bootstrap(app.store,'FixtureAdmin','TestOnlyPassword123');app.store.set('models',INITIAL_MODELS);
+    const admin=app.store.one('SELECT * FROM users WHERE username=?','FixtureAdmin'),viewerId=randomUUID();
+    app.store.run('INSERT INTO users(id,username,nickname,password,role,created_at) VALUES(?,?,?,?,?,?)',viewerId,'ViewerOnly','ViewerOnly',admin.password,'user',Date.now());
+    const viewer=app.store.one('SELECT * FROM users WHERE id=?',viewerId);
+    assert.equal(app.store.one('SELECT COUNT(*) n FROM players WHERE owner=?',viewerId).n,0);
+    // The fixture alone uses fast strategies; shipped strategies and real data are untouched.
+    app.store.run('UPDATE players SET source=?','export default state=>state.snakes.find(s=>s.id===state.you).direction');
+    await waitJob(app,app.arena.enqueue(admin,{kind:'bootstrap'}).id);
+    const draftInput={name:'Private draft',color:'#112233',model:INITIAL_MODELS[0],source:'export default ()=>"down"'};
+    const privateDraft=await app.arena.saveDraft(admin,draftInput);
+    const registered=await app.arena.saveDraft(admin,{...draftInput,name:'Public registered'});await app.arena.register(admin,registered.id);
+    const before=app.store.get('ranking'),stats=app.store.all('SELECT id,average,appearances,cooldown FROM players ORDER BY id');
+    const login=await fetch(base+'/api/login',{method:'POST',headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify({username:'ViewerOnly',password:'TestOnlyPassword123'})});
+    assert.equal(login.status,200);
+    const session=await login.json(),cookie=login.headers.get('set-cookie').split(';')[0];
+    const request=async(path,data)=>fetch(base+'/api'+path,{method:data?'POST':'GET',headers:{Cookie:cookie,...(data?{Origin:base,'Content-Type':'application/json','X-CSRF-Token':session.csrf}:{})},...(data?{body:JSON.stringify(data)}:{})});
+    for(const candidate of [1,registered.id]){
+      const response=await request('/jobs',{kind:'practice',candidate,opponents:[2],count:1});assert.equal(response.status,201);
+      const job=await waitJob(app,(await response.json()).id);assert.equal(job.applied,0);assert.equal(job.completed,1);
+      const replayResponse=await request('/jobs/'+job.id+'/replay/1');assert.equal(replayResponse.status,200);
+      const replay=await replayResponse.json();assert.ok(replay.frames.length>1);assert.equal(replay.frames[0].snakes.length,2);
+      assert.deepEqual(app.store.get('ranking'),before);assert.deepEqual(app.store.all('SELECT id,average,appearances,cooldown FROM players ORDER BY id'),stats);
+    }
+    assert.equal((await request('/players/'+registered.id+'/source')).status,403);
+    const publicPlayers=await (await request('/players?all=1')).json();
+    assert.ok(publicPlayers.every(p=>!('source' in p)));assert.ok(!publicPlayers.some(p=>p.id===privateDraft.id));
+    for(const data of [
+      {candidate:privateDraft.id,opponents:[1]},
+      {candidate:1,opponents:[privateDraft.id]},
+      {candidate:1,opponents:[1]},
+      {candidate:1,opponents:[2,2]},
+      {candidate:1,opponents:[]},
+      {candidate:1,opponents:Array.from({length:10},(_,i)=>i+2)}
+    ])assert.equal((await request('/jobs',{kind:'practice',count:1,...data})).status,400);
+    assert.equal((await request('/jobs',{kind:'ranked',candidate:registered.id})).status,400);
+    assert.equal((await request('/jobs',{kind:'ranked',candidate:1})).status,400);
+    await app.arena.retire(admin,registered.id);
+    assert.equal((await request('/jobs',{kind:'practice',candidate:registered.id,opponents:[1],count:1})).status,400);
+    assert.equal(app.store.one('SELECT COUNT(*) n FROM players WHERE owner=?',viewerId).n,0);
+  }finally{await app.close();}
 });
