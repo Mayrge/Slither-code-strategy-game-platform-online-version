@@ -29,7 +29,7 @@ export async function createServer({database=resolve(root,'data/arena.sqlite'),p
   server.on('request',async(req,res)=>{
     try {
       const url=new URL(req.url,'http://localhost'),path=url.pathname,method=req.method;
-      if(path==='/api/health'&&method==='GET')return send(res,200,{app:'snake-arena-online',version:'0.1.0',initialized:!!store.one("SELECT id FROM users WHERE role='admin'")});
+      if(path==='/api/health'&&method==='GET')return send(res,200,{app:'snake-arena-online',version:'0.1.1',initialized:!!store.one("SELECT id FROM users WHERE role='admin'")});
       if(path.startsWith('/api/')) {
         const user=readSession(store,req);
         if(!['GET','HEAD'].includes(method)) {
@@ -164,7 +164,7 @@ if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
     // Bind before opening the database: a duplicate launch must not invalidate an active match.
     await new Promise((ready,reject)=>{listener.once('error',reject);listener.listen(port,'127.0.0.1',ready);});
     const app=await createServer({listener});
-    console.log(`联网版 v0.1.0：http://127.0.0.1:${app.server.address().port}`);
+    console.log(`联网版 v0.1.1：http://127.0.0.1:${app.server.address().port}`);
     app.server.on('error',error=>{console.error(error.message);process.exitCode=1;void app.close();});
     for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>void app.close().then(()=>process.exit()));
   }catch(error){console.error(error.code==='EADDRINUSE'?`端口 ${port} 已被占用。竞技台可能已经启动；请打开已有页面，或修改 .env 中的 PORT。`:error.message);listener.close();process.exitCode=1;}
