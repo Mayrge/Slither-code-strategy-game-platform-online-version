@@ -13,12 +13,15 @@ try {
         try { vms.set(p.id,await StrategyVM.create(p.source,round.seed+':'+p.id)); }
         catch { errors.set(p.id,'代码加载失败或初始化超时'); }
       }
-      parentPort.postMessage({type:'frame',round:round.round,frame:frames[0],config:game.config});
+      let pending=[frames[0]];
+      const flush=()=>{parentPort.postMessage({type:'frames',round:round.round,frames:pending,config:game.config});pending=[];};
+      flush();
       while(!game.done) {
         const actions=new Map(game.snakes.filter(s=>s.alive).map(s=>[s.id,errors.has(s.id)?{error:errors.get(s.id)}:vms.get(s.id).decide(game.observation(s.id))]));
         const frame=game.step(actions); frames.push(frame);
+        pending.push(frame);
         for(const s of game.snakes.filter(s=>!s.alive)) { vms.get(s.id)?.dispose(); vms.delete(s.id); }
-        if(game.turn%10===0 || game.done) parentPort.postMessage({type:'frame',round:round.round,frame,config:game.config});
+        if(game.turn%10===0 || game.done) flush();
       }
       parentPort.postMessage({type:'game',round:round.round,seed:round.seed,results:scoreRound(game.snakes).map(({id,name,color,score,rank,points,alive,deathTurn,deathReason})=>({id,name,color,score,rank,points,alive,deathTurn,deathReason})),replay:makeReplay(game.config,game.seed,frames)});
     } finally { for(const vm of vms.values()) vm.dispose(); }

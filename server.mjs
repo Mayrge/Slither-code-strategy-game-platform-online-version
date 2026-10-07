@@ -29,7 +29,7 @@ export async function createServer({database=resolve(root,'data/arena.sqlite'),p
   server.on('request',async(req,res)=>{
     try {
       const url=new URL(req.url,'http://localhost'),path=url.pathname,method=req.method;
-      if(path==='/api/health'&&method==='GET')return send(res,200,{app:'snake-arena-online',version:'0.1.2',initialized:!!store.one("SELECT id FROM users WHERE role='admin'")});
+      if(path==='/api/health'&&method==='GET')return send(res,200,{app:'snake-arena-online',version:'0.1.3',initialized:!!store.one("SELECT id FROM users WHERE role='admin'")});
       if(path.startsWith('/api/')) {
         const user=readSession(store,req);
         if(!['GET','HEAD'].includes(method)) {
@@ -67,12 +67,14 @@ export async function createServer({database=resolve(root,'data/arena.sqlite'),p
         if(method==='POST'&&path==='/api/logout') {store.run('DELETE FROM sessions WHERE hash=?',user.session_hash);return send(res,200,{ok:true},{'Set-Cookie':'arena_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'+(canonical?'; Secure':'')});}
         if(method==='POST'&&path==='/api/account') {
           const input=await body(req),nickname=String(input.nickname||'').trim();if(!nickname||nickname.length>24)fail('昵称需要1～24个字符');
+          if(input.guideDisabled!==undefined&&typeof input.guideDisabled!=='boolean')fail('新手引导设置无效');
           if(input.newPassword) {
             if(!(await verifyPassword(input.password,user.password)))fail('当前密码错误',403);
             const password=await hashPassword(input.newPassword);
             store.transaction(()=>{store.run('UPDATE users SET nickname=?,password=? WHERE id=?',nickname,password,user.id);store.run('DELETE FROM sessions WHERE user_id=? AND hash!=?',user.id,user.session_hash);});
           }else store.run('UPDATE users SET nickname=? WHERE id=?',nickname,user.id);
-          return send(res,200,{ok:true});
+          if(input.guideDisabled!==undefined)store.run('UPDATE users SET guide_disabled=? WHERE id=?',input.guideDisabled?1:0,user.id);
+          return send(res,200,{ok:true,user:publicUser(store.one('SELECT * FROM users WHERE id=?',user.id))});
         }
         if(method==='GET'&&path==='/api/players')return send(res,200,arena.listPlayers(user,url.searchParams.get('all')==='1'));
         if(method==='POST'&&path==='/api/players')return send(res,201,await arena.saveDraft(user,await body(req)));
@@ -98,8 +100,7 @@ export async function createServer({database=resolve(root,'data/arena.sqlite'),p
           if(method==='GET'&&action==='games')return send(res,200,arena.gameList(user,id));
           if(method==='GET'&&action==='replay'&&round)return send(res,200,arena.replay(user,id,integer(round)));
           if(method==='GET'&&action==='current') {
-            const job=store.one('SELECT owner FROM jobs WHERE id=?',id);if(!job||(job.owner!==user.id&&user.role!=='admin'))fail('无权查看该比赛',403);
-            return send(res,200,arena.current?.id===id?arena.current:null);
+            return send(res,200,arena.live(user,id,Number(url.searchParams.get('after')||0)));
           }
           if(method==='DELETE'&&!action){arena.deleteJob(user,id);return send(res,200,{ok:true});}
         }
@@ -164,7 +165,7 @@ if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
     // Bind before opening the database: a duplicate launch must not invalidate an active match.
     await new Promise((ready,reject)=>{listener.once('error',reject);listener.listen(port,'127.0.0.1',ready);});
     const app=await createServer({listener});
-    console.log(`联网版 v0.1.2：http://127.0.0.1:${app.server.address().port}`);
+    console.log(`联网版 v0.1.3：http://127.0.0.1:${app.server.address().port}`);
     app.server.on('error',error=>{console.error(error.message);process.exitCode=1;void app.close();});
     for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>void app.close().then(()=>process.exit()));
   }catch(error){console.error(error.code==='EADDRINUSE'?`端口 ${port} 已被占用。竞技台可能已经启动；请打开已有页面，或修改 .env 中的 PORT。`:error.message);listener.close();process.exitCode=1;}

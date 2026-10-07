@@ -6,10 +6,12 @@ import { digest,rateLimit } from './auth.mjs';
 import { validateInWorker } from './validation-worker.mjs';
 import { emptyRanking,chooseOpponents,planJob,scheduleJob,settleRanking,COOLDOWN } from './ranking.mjs';
 
+import { LiveBuffer } from './live-buffer.mjs';
+
 export const fail = (message,status=400) => { throw Object.assign(new Error(message),{status}); };
 export function playerView(p, source=false) {
   const {id,owner,name,color,model,status,system,created_at,registered_at,retired_at,cooldown,average,appearances,username,nickname}=p;
-  return {id,owner,name,color,model,status,system:!!system,createdAt:created_at,registeredAt:registered_at,retiredAt:retired_at,cooldown,average,appearances,username,nickname,...(source?{source:p.source}:{})};
+  return {id,owner,name,color,model,status,system:!!system,createdAt:created_at,registeredAt:registered_at,retiredAt:retired_at,cooldown,average,appearances,username,nickname,bestRank:p.best_rank,bestRankAt:p.best_rank_at,...(source?{source:p.source}:{})};
 }
 export class ArenaService {
   constructor(store,{startWorkers=true}={}) {
@@ -87,7 +89,7 @@ export class ArenaService {
     this.store.transaction(()=>{
       this.store.run("UPDATE players SET status='retired',retired_at=? WHERE id=?",Date.now(),id);
       const rank=this.store.get('ranking',emptyRanking()); const before=[...rank.order]; rank.order=rank.order.filter(v=>v!==id);
-      if(before.length!==rank.order.length) { rank.revision++; rank.history.unshift({at:Date.now(),kind:'retire',candidate:id,before,after:[...rank.order]}); this.store.set('ranking',rank); }
+      if(before.length!==rank.order.length) { rank.revision++; rank.history.unshift({at:Date.now(),kind:'retire',candidate:id,before,after:[...rank.order]}); this.store.set('ranking',rank); this.store.recordPeaks(rank.order,rank.history[0].at); }
       this.store.audit(user.id,'retire-player',id);
     });
   }
@@ -137,7 +139,7 @@ export class ArenaService {
       const schedule=scheduleJob(players,job.total,job.seed);
       this.store.run("UPDATE jobs SET status='running',plan=?,roster=? WHERE id=?",JSON.stringify(plan),JSON.stringify(players.map(p=>p.id)),job.id);
       const worker=new Worker(new URL('./match-worker.mjs',import.meta.url),{workerData:{players,schedule},resourceLimits:{maxOldGenerationSizeMb:128},execArgv:[]});
-      this.worker=worker; this.current={id:job.id,round:0,frame:null,config:null};
+      this.worker=worker; this.current={id:job.id,buffer:new LiveBuffer()};
       let last=Date.now(),finished=false;
       const complete=error=>{
         if(finished)return; finished=true; clearInterval(timer);
@@ -151,6 +153,7 @@ export class ArenaService {
               const settled=settleRanking(this.store.get('ranking',emptyRanking()),plan,games);
               settled.ranking.history[0].jobId=job.id;
               this.store.set('ranking',settled.ranking);
+              this.store.recordPeaks(settled.ranking.order,settled.ranking.history[0].at);
               for(const [id,t] of Object.entries(settled.averages)) this.store.run('UPDATE players SET average=?,appearances=appearances+? WHERE id=?',t.average,t.games,Number(id));
               if(settled.retired) this.store.run("UPDATE players SET status='retired',retired_at=? WHERE id=?",Date.now(),settled.retired);
               if(job.candidate) this.store.run('UPDATE players SET cooldown=? WHERE id=?',Date.now()+COOLDOWN,job.candidate);
@@ -165,7 +168,7 @@ export class ArenaService {
       worker.on('message',message=>{
         if(finished)return; last=Date.now();
         try {
-          if(message.type==='frame') this.current={id:job.id,round:message.round,frame:message.frame,config:message.config};
+          if(message.type==='frames') this.current.buffer.push(message.round,message.frames,message.config);
           else if(message.type==='game') this.store.transaction(()=>{
             this.store.run('INSERT INTO games VALUES(?,?,?,?,?)',job.id,message.round,message.seed,JSON.stringify(message.results),gzipSync(JSON.stringify(message.replay)));
             this.store.run('UPDATE jobs SET completed=? WHERE id=?',message.round,job.id);
@@ -176,6 +179,12 @@ export class ArenaService {
       worker.on('error',()=>complete('执行环境异常，未计入排行榜'));
       worker.on('exit',()=>{if(!finished)complete('执行环境退出，未计入排行榜');});
     } catch(error) { this.store.run("UPDATE jobs SET status='failed',error=?,finished_at=? WHERE id=?",error.message,Date.now(),job.id); this.kick(); }
+  }
+  live(user,id,after=0) {
+    const job=this.store.one('SELECT owner,status,total,completed,error FROM jobs WHERE id=?',id);
+    if(!job||(job.owner!==user.id&&user.role!=='admin'))fail('无权查看该比赛',403);
+    if(!Number.isSafeInteger(after)||after<0)fail('画面序号无效');
+    return {status:job.status,total:job.total,completed:job.completed,error:job.error,...(this.current?.id===id?this.current.buffer.since(after):{frames:[],sequence:after})};
   }
   jobs(user) { return this.store.all('SELECT id,candidate,kind,status,total,completed,seed,created_at,finished_at,error,applied,roster FROM jobs WHERE owner=? ORDER BY created_at DESC LIMIT 200',user.id).map(j=>({...j,roster:JSON.parse(j.roster)})); }
   gameList(user,id) {

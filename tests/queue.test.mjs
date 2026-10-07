@@ -24,7 +24,8 @@ test('real 50-game settlement, replay deletion, cooldown, immutable history and 
     app.store.run('UPDATE players SET source=?','export default state=>state.snakes.find(s=>s.id===state.you).direction');
     const initial=app.arena.enqueue(user,{kind:'bootstrap'}).id;
     const first=await waitJob(app,initial);assert.equal(first.completed,50);assert.equal(first.applied,1);
-    assert.equal(app.store.get('ranking').order.length,10);assert.equal(app.store.get('ranking').revision,1);
+    assert.equal(app.store.get('ranking').order.length,10);
+    const initialRank=app.store.get('ranking');initialRank.order.forEach((id,i)=>{const p=app.store.one('SELECT best_rank,best_rank_at FROM players WHERE id=?',id);assert.equal(p.best_rank,i+1);assert.equal(p.best_rank_at,initialRank.history[0].at);});assert.equal(app.store.get('ranking').revision,1);
     const games=app.arena.gameList(user,initial);assert.equal(games.length,50);
     for(const game of games){assert.equal(game.results.length,10);assert.ok(game.results.every(p=>Number.isFinite(p.points)));}
     const replay=app.arena.replay(user,initial,1);assert.ok(replay.frames.length>1);
@@ -39,7 +40,8 @@ test('real 50-game settlement, replay deletion, cooldown, immutable history and 
     const highlights=app.arena.highlights(user,draft.id);assert.ok(highlights.length>=3&&highlights.length<=5);
     assert.equal(new Set(highlights.map(g=>g.jobId+':'+g.round)).size,highlights.length);
     const before=app.store.get('ranking'),cooldown=app.store.one('SELECT cooldown FROM players WHERE id=?',draft.id).cooldown;
-    app.arena.deleteJob(user,ranked);assert.equal(app.store.one('SELECT COUNT(*) n FROM games WHERE job_id=?',ranked).n,0);
+    const peaks=app.store.all('SELECT id,best_rank,best_rank_at FROM players');
+    app.arena.deleteJob(user,ranked);assert.deepEqual(app.store.all('SELECT id,best_rank,best_rank_at FROM players'),peaks);assert.equal(app.store.one('SELECT COUNT(*) n FROM games WHERE job_id=?',ranked).n,0);
     assert.deepEqual(app.store.get('ranking'),before);assert.equal(app.store.one('SELECT appearances FROM players WHERE id=?',draft.id).appearances,50);
     assert.throws(()=>app.arena.replay(user,ranked,1),/无权/);
     await app.close();app=null;

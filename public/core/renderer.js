@@ -4,18 +4,24 @@ export class BoardRenderer {
   draw(frame, config) {
     const ctx = this.ctx, size = this.canvas.width;
     const cw = size / config.width, ch = size / config.height;
-    ctx.clearRect(0, 0, size, size);
-    ctx.fillStyle = '#111c15'; ctx.fillRect(0, 0, size, size);
+    const key = `${size}:${config.width}:${config.height}`;
+    if (this.backgroundKey !== key) {
+    this.background = this.canvas.ownerDocument.createElement('canvas');
+    this.background.width = size; this.background.height = size;
+    const background = this.background.getContext('2d');
+    background.fillStyle = '#111c15'; background.fillRect(0, 0, size, size);
     for (let y = 0; y < config.height; y++) for (let x = 0; x < config.width; x++) {
       if ((Math.floor(x / 5) + Math.floor(y / 5)) % 2 === 0) {
-        ctx.fillStyle = '#152019'; ctx.fillRect(x * cw, y * ch, cw, ch);
+        background.fillStyle = '#152019'; background.fillRect(x * cw, y * ch, cw, ch);
       }
     }
-    ctx.strokeStyle = '#263329'; ctx.lineWidth = 0.6;
-    ctx.beginPath();
-    for (let i = 0; i <= config.width; i++) { ctx.moveTo(i * cw, 0); ctx.lineTo(i * cw, size); }
-    for (let i = 0; i <= config.height; i++) { ctx.moveTo(0, i * ch); ctx.lineTo(size, i * ch); }
-    ctx.stroke();
+    background.strokeStyle = '#263329'; background.lineWidth = 0.6;
+    background.beginPath();
+    for (let i = 0; i <= config.width; i++) { background.moveTo(i * cw, 0); background.lineTo(i * cw, size); }
+    for (let i = 0; i <= config.height; i++) { background.moveTo(0, i * ch); background.lineTo(size, i * ch); }
+    background.stroke(); this.backgroundKey = key;
+    }
+    ctx.drawImage(this.background, 0, 0);
     for (const cell of frame.food) {
       const x = (cell % config.width + 0.5) * cw, y = (Math.floor(cell / config.width) + 0.5) * ch;
       ctx.save(); ctx.translate(x, y); ctx.rotate(Math.PI / 4);

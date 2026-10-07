@@ -18,6 +18,20 @@ export class Store {
       CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL REFERENCES users(id), body TEXT NOT NULL, created_at INTEGER NOT NULL, deleted_at INTEGER);
       CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT, action TEXT NOT NULL, target TEXT, created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS limits(key TEXT PRIMARY KEY, count INTEGER NOT NULL, reset INTEGER NOT NULL);`);
+    this.transaction(() => {
+      for (const [table, column, type] of [['users','guide_disabled','INTEGER NOT NULL DEFAULT 0'],['players','best_rank','INTEGER'],['players','best_rank_at','INTEGER']]) {
+        if (!this.all(`PRAGMA table_info(${table})`).some(c => c.name === column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+      }
+      if (!this.get('peak-rank-migrated', false)) {
+        const ranking = this.get('ranking', {order:[],history:[]});
+        for (const event of [...ranking.history].sort((a,b)=>a.at-b.at)) this.recordPeaks(event.after || [], event.at || null);
+        this.recordPeaks(ranking.order, null);
+        this.set('peak-rank-migrated', true);
+      }
+    });
+  }
+  recordPeaks(order, at) {
+    order.forEach((id, i) => this.run('UPDATE players SET best_rank=?,best_rank_at=? WHERE id=? AND (best_rank IS NULL OR best_rank>?)', i+1, at, id, i+1));
   }
   one(sql, ...args) { return this.db.prepare(sql).get(...args); }
   all(sql, ...args) { return this.db.prepare(sql).all(...args); }

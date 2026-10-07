@@ -18,6 +18,13 @@ test('invite registration, ownership, admin review, CSRF, immutable players and 
     for(const username of ['friendA','friendB']){const result=await request('/register',{method:'POST',data:{username,password:PASSWORD,invite:made.result.code,consent:true}});assert.equal(result.status,201);}
     assert.equal((await request('/register',{method:'POST',data:{username:'friendC',password:PASSWORD,invite:made.result.code,consent:true}})).status,400);
     const a=await login('friendA'),b=await login('friendB');
+    assert.equal((await request('/me',{session:a})).result.user.guideDisabled,false);
+    assert.equal((await request('/account',{method:'POST',session:a,data:{nickname:'friendA',guideDisabled:true}})).status,200);
+    const aNew=await login('friendA');assert.equal((await request('/me',{session:aNew})).result.user.guideDisabled,true);
+    assert.equal((await request('/me',{session:b})).result.user.guideDisabled,false);
+    assert.equal((await request('/account',{method:'POST',session:a,data:{nickname:'Should not save',guideDisabled:'false'}})).status,400);
+    assert.equal((await request('/me',{session:a})).result.user.nickname,'friendA');
+    assert.equal((await request('/account',{method:'POST',session:a,data:{nickname:'friendA',guideDisabled:false}})).status,200);
     const source='export default function(){return "down"}',input={name:'Alpha',color:'#aabbcc',model:INITIAL_MODELS[0],source};
     const draft=await request('/players',{method:'POST',data:input,session:a});assert.equal(draft.status,201);const id=draft.result.id;
     const otherList=await request('/players?all=1',{session:b});assert.ok(!otherList.result.some(p=>p.id===id));
