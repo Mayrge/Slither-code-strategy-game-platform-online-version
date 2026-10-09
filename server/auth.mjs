@@ -42,7 +42,7 @@ export async function bootstrap(store, username, password) {
   store.run('INSERT INTO users(id,username,nickname,password,role,created_at) VALUES(?,?,?,?,?,?)', id, username, username, hash, 'admin', Date.now());
   return id;
 }
-export function publicUser(row) { return { id: row.id, username:row.username, nickname:row.nickname, role:row.role, guideDisabled:!!row.guide_disabled }; }
+export function publicUser(row) { return { id: row.id, username:row.username, nickname:row.nickname, role:row.role, guideDisabled:!!row.guide_disabled, announcementDisabled:!!row.announcement_disabled, announcementSeen:row.announcement_seen||0 }; }
 export function rateLimit(store, key, maximum, window) {
   const now = Date.now(), old = store.one('SELECT * FROM limits WHERE key=?', key);
   if (old && old.reset > now && old.count >= maximum) throw Object.assign(new Error('操作过于频繁，请稍后再试'), { status:429 });

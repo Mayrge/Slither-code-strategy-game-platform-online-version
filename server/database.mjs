@@ -19,14 +19,26 @@ export class Store {
       CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT, action TEXT NOT NULL, target TEXT, created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS limits(key TEXT PRIMARY KEY, count INTEGER NOT NULL, reset INTEGER NOT NULL);`);
     this.transaction(() => {
-      for (const [table, column, type] of [['users','guide_disabled','INTEGER NOT NULL DEFAULT 0'],['players','best_rank','INTEGER'],['players','best_rank_at','INTEGER']]) {
+      for (const [table, column, type] of [['users','guide_disabled','INTEGER NOT NULL DEFAULT 0'],['users','announcement_disabled','INTEGER NOT NULL DEFAULT 0'],['users','announcement_seen','INTEGER NOT NULL DEFAULT 0'],['users','invite_limit','INTEGER NOT NULL DEFAULT 5'],['invites','owner','TEXT REFERENCES users(id)'],['invites','superseded','INTEGER NOT NULL DEFAULT 0'],['players','removed_at','INTEGER'],['players','best_rank','INTEGER'],['players','best_rank_at','INTEGER']]) {
         if (!this.all(`PRAGMA table_info(${table})`).some(c => c.name === column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
       }
+      this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS personal_invite ON invites(owner) WHERE owner IS NOT NULL AND superseded=0;
+        CREATE TABLE IF NOT EXISTS announcements(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,body TEXT NOT NULL,created_at INTEGER NOT NULL,active INTEGER NOT NULL DEFAULT 1);
+        CREATE TABLE IF NOT EXISTS private_messages(id INTEGER PRIMARY KEY AUTOINCREMENT,owner TEXT NOT NULL REFERENCES users(id),sender TEXT NOT NULL REFERENCES users(id),body TEXT NOT NULL,created_at INTEGER NOT NULL,read_at INTEGER);
+        CREATE INDEX IF NOT EXISTS private_thread ON private_messages(owner,id);`);
       if (!this.get('peak-rank-migrated', false)) {
         const ranking = this.get('ranking', {order:[],history:[]});
         for (const event of [...ranking.history].sort((a,b)=>a.at-b.at)) this.recordPeaks(event.after || [], event.at || null);
         this.recordPeaks(ranking.order, null);
         this.set('peak-rank-migrated', true);
+      }
+      const order=this.get('ranking',{order:[]}).order;
+      for(const p of this.all("SELECT id FROM players WHERE system=0 AND status='retired' AND appearances=0 AND best_rank IS NULL AND removed_at IS NULL")) {
+        if(!order.includes(p.id))this.run("UPDATE players SET source='',removed_at=? WHERE id=?",Date.now(),p.id);
+      }
+      if(!this.get('community-v1-migrated',false)) {
+        this.run('INSERT INTO announcements(title,body,created_at) VALUES(?,?,?)','邀请朋友，一起完善竞技台','账户设置新增个人邀请码：拥有至少一名未退役的注册选手即可生成，默认可邀请 5 个账户。邀请名额不会因更换邀请码而重置。\n同时新增“与服主对话”，可以私下向服主反馈问题并查看回复。\n通知可临时关闭，也可永久关闭自动弹出；右上角通知入口始终保留。',Date.now());
+        this.set('community-v1-migrated',true);
       }
     });
   }

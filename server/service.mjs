@@ -29,11 +29,11 @@ export class ArenaService {
     }
   }
   listPlayers(user,all=false) {
-    const rows=this.store.all('SELECT p.*,u.username,u.nickname FROM players p LEFT JOIN users u ON u.id=p.owner '+(all?(user.role==='admin'?'':"WHERE p.status!='draft' OR p.owner=?"):"WHERE p.owner=? OR p.system=1"),...(all&&user.role==='admin'?[]:[user.id]));
+    const rows=this.store.all('SELECT p.*,u.username,u.nickname FROM players p LEFT JOIN users u ON u.id=p.owner WHERE p.removed_at IS NULL AND '+(all?(user.role==='admin'?'1=1':"(p.status!='draft' OR p.owner=?)"):"(p.owner=? OR p.system=1)")+' ORDER BY p.system,p.appearances DESC,COALESCE(p.registered_at,p.created_at),p.id',...(all&&user.role==='admin'?[]:[user.id]));
     return rows.map(p=>playerView(p,p.owner===user.id));
   }
   source(user,id) {
-    const p=this.store.one('SELECT * FROM players WHERE id=?',id);
+    const p=this.store.one('SELECT * FROM players WHERE id=? AND removed_at IS NULL',id);
     if(!p || (p.owner!==user.id && user.role!=='admin')) fail('无权查看该策略',403);
     if(user.role==='admin' && p.owner!==user.id) this.store.audit(user.id,'view-source',id);
     return {source:p.source};
@@ -88,6 +88,10 @@ export class ArenaService {
     if(ranking.order.includes(id)&&active.some(j=>j.kind!=='practice'&&j.status==='running')) fail('正式比赛结算期间暂不能改变榜单，请比赛完成后退役');
     this.store.transaction(()=>{
       this.store.run("UPDATE players SET status='retired',retired_at=? WHERE id=?",Date.now(),id);
+      if(!p.appearances&&p.best_rank==null&&!ranking.order.includes(id)) {
+        this.store.run("UPDATE players SET source='',removed_at=? WHERE id=?",Date.now(),id);
+        this.store.audit(user.id,'remove-unplayed-player',id);
+      }
       const rank=this.store.get('ranking',emptyRanking()); const before=[...rank.order]; rank.order=rank.order.filter(v=>v!==id);
       if(before.length!==rank.order.length) { rank.revision++; rank.history.unshift({at:Date.now(),kind:'retire',candidate:id,before,after:[...rank.order]}); this.store.set('ranking',rank); this.store.recordPeaks(rank.order,rank.history[0].at); }
       this.store.audit(user.id,'retire-player',id);

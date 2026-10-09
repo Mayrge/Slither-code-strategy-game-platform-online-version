@@ -32,7 +32,10 @@ test('invite registration, ownership, admin review, CSRF, immutable players and 
     assert.equal((await request('/players/'+id+'/register',{method:'POST',session:a})).status,200);
     assert.equal((await request('/players/'+id,{method:'PUT',session:a,data:{...input,name:'changed'}})).status,403);
     const publicList=await request('/players?all=1',{session:b});assert.ok(publicList.result.some(p=>p.id===id));assert.ok(publicList.result.every(p=>!('source'in p)));
-    assert.equal((await request('/players/'+id+'/retire',{method:'POST',session:a})).status,200);
+    assert.equal((await request('/players/'+id+'/retire',{method:'POST',session:a,data:{confirmRemoval:false}})).status,400);
+    assert.equal((await request('/players/'+id+'/retire',{method:'POST',session:a,data:{confirmRemoval:true}})).status,200);
+    assert.ok(!(await request('/players?all=1',{session:a})).result.some(p=>p.id===id));
+    assert.equal((await request('/players/'+id+'/source',{session:admin})).status,403);
     const duplicate=await request('/players',{method:'POST',session:a,data:{...input,name:'Beta'}});assert.equal((await request('/players/'+duplicate.result.id+'/register',{method:'POST',session:a})).status,400);
     assert.equal((await request('/admin/invites',{session:b})).status,403);
     assert.equal((await request('/messages',{method:'POST',session:a,data:{body:'<script>alert(1)</script>'},origin:'https://evil.example'})).status,403);

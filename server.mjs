@@ -4,6 +4,7 @@ import { resolve,extname,sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { Store } from './server/database.mjs';
+import { Community } from './server/community.mjs';
 import { ArenaService,fail } from './server/service.mjs';
 import { token,digest,validUsername,hashPassword,verifyPassword,openSession,readSession,publicUser,rateLimit } from './server/auth.mjs';
 import { emptyRanking } from './server/ranking.mjs';
@@ -21,6 +22,7 @@ async function body(req) {
 const integer=value=>{const n=Number(value);if(!Number.isSafeInteger(n)||n<1)fail('编号无效');return n;};
 export async function createServer({database=resolve(root,'data/arena.sqlite'),publicUrl=process.env.PUBLIC_URL||'',workers=true,listener=null}={}) {
   const store=new Store(database),arena=new ArenaService(store,{startWorkers:workers});
+  const community=new Community(store);
   await arena.seedSystems();
   const canonical=publicUrl?new URL(publicUrl).origin:null;
   if(canonical&&!canonical.startsWith('https://'))throw new Error('PUBLIC_URL需要使用HTTPS网站地址');
@@ -29,7 +31,7 @@ export async function createServer({database=resolve(root,'data/arena.sqlite'),p
   server.on('request',async(req,res)=>{
     try {
       const url=new URL(req.url,'http://localhost'),path=url.pathname,method=req.method;
-      if(path==='/api/health'&&method==='GET')return send(res,200,{app:'snake-arena-online',version:'0.1.4',initialized:!!store.one("SELECT id FROM users WHERE role='admin'")});
+      if(path==='/api/health'&&method==='GET')return send(res,200,{app:'snake-arena-online',version:'0.1.5',initialized:!!store.one("SELECT id FROM users WHERE role='admin'")});
       if(path.startsWith('/api/')) {
         const user=readSession(store,req);
         if(!['GET','HEAD'].includes(method)) {
@@ -54,7 +56,7 @@ export async function createServer({database=resolve(root,'data/arena.sqlite'),p
           store.transaction(()=>{
             if(store.one('SELECT id FROM users WHERE username=? COLLATE NOCASE',input.username))fail('用户名已被使用');
             const invite=store.one('SELECT * FROM invites WHERE code=?',code);
-            if(!invite||!invite.enabled||invite.uses>=invite.max_uses||(invite.expires&&invite.expires<Date.now()))fail('邀请码无效、过期或人数已满');
+            community.validateInvite(invite);
             store.run('INSERT INTO users(id,username,nickname,password,role,invite_id,created_at) VALUES(?,?,?,?,?,?,?)',id,input.username,input.username,password,'user',invite.id,Date.now());
             store.run('UPDATE invites SET uses=uses+1 WHERE id=?',invite.id);store.audit(id,'account-register',invite.id);
           });
@@ -63,6 +65,8 @@ export async function createServer({database=resolve(root,'data/arena.sqlite'),p
         }
         if(!user)fail('请先登录',401);
         const admin=()=>{if(user.role!=='admin')fail('需要管理员权限',403);};
+        const communityResult=await community.route({path,method,user,body:()=>body(req)});
+        if(communityResult!==undefined)return send(res,200,communityResult);
         if(method==='GET'&&path==='/api/me')return send(res,200,{user:publicUser(user),csrf:user.csrf,models:store.get('models',[])});
         if(method==='POST'&&path==='/api/logout') {store.run('DELETE FROM sessions WHERE hash=?',user.session_hash);return send(res,200,{ok:true},{'Set-Cookie':'arena_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'+(canonical?'; Secure':'')});}
         if(method==='POST'&&path==='/api/account') {
@@ -85,7 +89,12 @@ export async function createServer({database=resolve(root,'data/arena.sqlite'),p
           if(method==='GET'&&action==='highlights')return send(res,200,arena.highlights(user,id));
           if(method==='PUT'&&!action)return send(res,200,await arena.saveDraft(user,await body(req),id));
           if(method==='POST'&&action==='register')return send(res,200,await arena.register(user,id));
-          if(method==='POST'&&action==='retire') {arena.retire(user,id);return send(res,200,{ok:true});}
+          if(method==='POST'&&action==='retire') {
+            const p=store.one('SELECT * FROM players WHERE id=? AND owner=?',id,user.id);
+            const removing=p&&p.status==='registered'&&!p.appearances&&p.best_rank==null&&!store.get('ranking',emptyRanking()).order.includes(id);
+            if(removing&&(await body(req)).confirmRemoval!==true)fail('该选手为0场次且从未入榜，退役将永久删除选手及代码，请明确确认');
+            arena.retire(user,id);return send(res,200,{ok:true,removed:!!removing});
+          }
           if(method==='DELETE'&&!action) {
             const p=store.one("SELECT id FROM players WHERE id=? AND owner=? AND status='draft'",id,user.id);if(!p)fail('只能删除自己的草稿',403);
             store.run('DELETE FROM players WHERE id=?',id);return send(res,200,{ok:true});
@@ -129,7 +138,7 @@ export async function createServer({database=resolve(root,'data/arena.sqlite'),p
             const id=randomUUID(),code=token().slice(0,16).toUpperCase();store.run('INSERT INTO invites(id,code,label,max_uses,expires,created_at) VALUES(?,?,?,?,?,?)',id,code,label,max,expires,Date.now());store.audit(user.id,'create-invite',id);return send(res,201,{id,code});
           }
           const inviteMatch=path.match(/^\/api\/admin\/invites\/([a-f0-9-]{36})$/);
-          if(method==='PUT'&&inviteMatch) {const input=await body(req);if(typeof input.enabled!=='boolean')fail('状态无效');store.run('UPDATE invites SET enabled=? WHERE id=?',input.enabled?1:0,inviteMatch[1]);store.audit(user.id,'invite-state',inviteMatch[1]);return send(res,200,{ok:true});}
+          if(method==='PUT'&&inviteMatch) {const input=await body(req);if(typeof input.enabled!=='boolean')fail('状态无效');const invite=store.one('SELECT * FROM invites WHERE id=?',inviteMatch[1]);if(!invite||invite.superseded)fail('邀请码不存在或已被更换');store.run('UPDATE invites SET enabled=? WHERE id=?',input.enabled?1:0,inviteMatch[1]);store.audit(user.id,'invite-state',inviteMatch[1]);return send(res,200,{ok:true});}
           if(method==='GET'&&path==='/api/admin/users')return send(res,200,store.all('SELECT u.id,u.username,u.nickname,u.role,u.banned,u.created_at,i.label AS source FROM users u LEFT JOIN invites i ON i.id=u.invite_id ORDER BY u.created_at DESC'));
           const userMatch=path.match(/^\/api\/admin\/users\/([a-f0-9-]{36})$/);
           if(method==='PUT'&&userMatch) {
@@ -165,7 +174,7 @@ if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
     // Bind before opening the database: a duplicate launch must not invalidate an active match.
     await new Promise((ready,reject)=>{listener.once('error',reject);listener.listen(port,'127.0.0.1',ready);});
     const app=await createServer({listener});
-    console.log(`联网版 v0.1.4：http://127.0.0.1:${app.server.address().port}`);
+    console.log(`联网版 v0.1.5：http://127.0.0.1:${app.server.address().port}`);
     app.server.on('error',error=>{console.error(error.message);process.exitCode=1;void app.close();});
     for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>void app.close().then(()=>process.exit()));
   }catch(error){console.error(error.code==='EADDRINUSE'?`端口 ${port} 已被占用。竞技台可能已经启动；请打开已有页面，或修改 .env 中的 PORT。`:error.message);listener.close();process.exitCode=1;}
